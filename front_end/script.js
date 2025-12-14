@@ -234,25 +234,35 @@ async function handleGenerate() {
             // Try to parse error response as JSON
             let errorMessage = '';
             try {
-                const errorData = await response.json();
-                // Extract error message from various possible formats
-                if (errorData.error && typeof errorData.error === 'string') {
-                    errorMessage = errorData.error;
-                } else if (errorData.detail) {
-                    // FastAPI sometimes wraps error in detail
-                    if (typeof errorData.detail === 'string') {
-                        errorMessage = errorData.detail;
-                    } else if (errorData.detail.error && typeof errorData.detail.error === 'string') {
-                        errorMessage = errorData.detail.error;
+                const data = await response.json();
+                
+                // Priority 1: Check for data.error
+                if (data.error) {
+                    if (typeof data.error === 'string') {
+                        errorMessage = data.error;
                     } else {
-                        errorMessage = JSON.stringify(errorData.detail);
+                        // If error is not a string, stringify it to avoid [object Object]
+                        errorMessage = JSON.stringify(data.error);
                     }
-                } else {
-                    errorMessage = JSON.stringify(errorData);
+                }
+                // Priority 2: Check for data.detail
+                else if (data.detail) {
+                    if (typeof data.detail === 'string') {
+                        errorMessage = data.detail;
+                    } else if (data.detail.error && typeof data.detail.error === 'string') {
+                        errorMessage = data.detail.error;
+                    } else {
+                        // If detail is not a string and has no error property, stringify it
+                        errorMessage = JSON.stringify(data.detail);
+                    }
+                }
+                // Priority 3: Generic fallback - stringify entire response to avoid [object Object]
+                else {
+                    errorMessage = JSON.stringify(data);
                 }
             } catch (parseError) {
-                // If JSON parsing fails, use status info
-                errorMessage = `${response.status} ${response.statusText || 'Error'}`;
+                // If JSON parsing fails, use status info as generic fallback
+                errorMessage = `Request failed with status ${response.status}: ${response.statusText || 'Unknown error'}`;
             }
             
             // Add friendly upsell for daily limit

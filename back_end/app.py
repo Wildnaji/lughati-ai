@@ -2,16 +2,17 @@
 FastAPI application for Lughati AI backend.
 Provides the /api/generate endpoint for text processing and serves the frontend.
 """
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Tuple
 import os
 import time
 import logging
 from collections import defaultdict
+import openai
 from back_end.model import generate_text, MODE_PROMPTS
 
 
@@ -174,6 +175,34 @@ def has_server_api_key() -> bool:
         return False
 
 
+def map_openai_error_to_message(exception: Exception) -> str:
+    """
+    Map OpenAI API errors to user-friendly messages.
+    
+    Args:
+        exception: The exception raised by OpenAI API
+    
+    Returns:
+        Human-readable error message
+    """
+    error_str = str(exception).lower()
+    
+    # Check for invalid API key
+    if "invalid_api_key" in error_str or "authentication" in error_str or "api key" in error_str:
+        return "Invalid OpenAI API key."
+    
+    # Check for insufficient quota/billing issues
+    if "insufficient_quota" in error_str or "billing" in error_str or "quota" in error_str:
+        return "Server is out of credits. Please add your own OpenAI key or try again later."
+    
+    # Check for rate limiting
+    if "rate_limit" in error_str or "rate limit" in error_str:
+        return "Too many requests. Please wait and try again."
+    
+    # Generic fallback
+    return "An error occurred while processing your request. Please try again."
+
+
 @app.post("/api/generate", response_model=GenerateResponse)
 async def generate(
     request: GenerateRequest,
@@ -189,96 +218,110 @@ async def generate(
         x_openai_key: Optional OpenAI API key from header
     
     Returns:
-        GenerateResponse with the result
-    
-    Raises:
-        HTTPException: If input is invalid or processing fails
+        GenerateResponse with the result or JSONResponse with error
     """
     client_ip = get_client_ip(request_obj)
     has_byo_key = bool(x_openai_key and x_openai_key.strip())
     
-    try:
-        # 1. Check text length (applies to everyone)
-        if len(request.text) > MAX_TEXT_LENGTH:
-            error_msg = f"Text length exceeds maximum of {MAX_TEXT_LENGTH} characters"
-            logger.warning(f"Blocked request from {client_ip}: text too long ({len(request.text)} chars)")
-            raise HTTPException(
-                status_code=400,
-                detail={"error": error_msg}
+    # 1. Check text length (applies to everyone)
+    if len(request.text) > MAX_TEXT_LENGTH:
+        error_msg = f"Text length exceeds maximum of {MAX_TEXT_LENGTH} characters"
+        logger.warning(f"Blocked request from {client_ip}: text too long ({len(request.text)} chars)")
+        return JSONResponse(
+            status_code=400,
+            content={"error": error_msg}
+        )
+    
+    # 2. Check rate limit (applies to everyone, only for POST /api/generate)
+    allowed, reason = check_rate_limit(client_ip)
+    if not allowed:
+        if reason == "too_fast":
+            error_msg = "Too many requests. Please wait a second and try again."
+            logger.info(
+                f"Rate limit blocked: ip={client_ip}, reason={reason}, "
+                f"min_interval={MIN_REQUEST_INTERVAL_SECONDS}s"
             )
-        
-        # 2. Check rate limit (applies to everyone, only for POST /api/generate)
-        allowed, reason = check_rate_limit(client_ip)
-        if not allowed:
-            if reason == "too_fast":
-                error_msg = "Too many requests. Please wait a second and try again."
-                logger.info(
-                    f"Rate limit blocked: ip={client_ip}, reason={reason}, "
-                    f"min_interval={MIN_REQUEST_INTERVAL_SECONDS}s"
-                )
-            else:  # rate_window
-                current_count = len(rate_limit_store[client_ip])
-                error_msg = "Rate limit exceeded. Try again later."
-                logger.info(
-                    f"Rate limit blocked: ip={client_ip}, reason={reason}, "
-                    f"count={current_count}, limit={RATE_LIMIT_MAX_REQUESTS}, "
-                    f"window={RATE_LIMIT_WINDOW_SECONDS}s"
-                )
-            raise HTTPException(
+        else:  # rate_window
+            current_count = len(rate_limit_store[client_ip])
+            error_msg = "Rate limit exceeded. Try again later."
+            logger.info(
+                f"Rate limit blocked: ip={client_ip}, reason={reason}, "
+                f"count={current_count}, limit={RATE_LIMIT_MAX_REQUESTS}, "
+                f"window={RATE_LIMIT_WINDOW_SECONDS}s"
+            )
+        return JSONResponse(
+            status_code=429,
+            content={"error": error_msg}
+        )
+    
+    # 3. Validate input
+    if not request.text or not request.text.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Text cannot be empty"}
+        )
+    
+    if not request.mode:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Mode is required"}
+        )
+    
+    # 4. Check API key availability
+    # If no BYO key provided, check if server has a key
+    if not has_byo_key:
+        if not has_server_api_key():
+            # No server key and no BYO key - reject
+            error_msg = "Server is not configured. Please add your own OpenAI key to continue."
+            logger.warning(f"Blocked request from {client_ip}: no API key available")
+            return JSONResponse(
+                status_code=400,
+                content={"error": error_msg}
+            )
+        # Free tier: check daily cap (only when no BYO key)
+        if not check_daily_cap(client_ip):
+            error_msg = "Daily free limit reached. Add your own OpenAI key for unlimited usage (your billing) or subscribe to unlock more."
+            logger.warning(f"Blocked request from {client_ip}: daily free limit exceeded")
+            return JSONResponse(
                 status_code=429,
-                detail={"error": error_msg}
+                content={"error": error_msg}
             )
-        
-        # 3. Validate input
-        if not request.text or not request.text.strip():
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Text cannot be empty"}
-            )
-        
-        if not request.mode:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Mode is required"}
-            )
-        
-        # 4. Check API key availability
-        # If no BYO key provided, check if server has a key
-        if not has_byo_key:
-            if not has_server_api_key():
-                # No server key and no BYO key - reject
-                error_msg = "Server is not configured. Please add your own OpenAI key to continue."
-                logger.warning(f"Blocked request from {client_ip}: no API key available")
-                raise HTTPException(
-                    status_code=400,
-                    detail={"error": error_msg}
-                )
-            # Free tier: check daily cap (only when no BYO key)
-            if not check_daily_cap(client_ip):
-                error_msg = "Daily free limit reached. Add your own OpenAI key for unlimited usage (your billing) or subscribe to unlock more."
-                logger.warning(f"Blocked request from {client_ip}: daily free limit exceeded")
-                raise HTTPException(
-                    status_code=429,
-                    detail={"error": error_msg}
-                )
-        
-        # 5. Generate text (pass API key if provided)
-        # Note: x_openai_key is never logged - only passed to generate_text
+    
+    # 5. Generate text (pass API key if provided)
+    # Note: x_openai_key is never logged - only passed to generate_text
+    try:
         api_key = x_openai_key if has_byo_key else None
         result = generate_text(request.text, request.mode, api_key=api_key)
-        
         return GenerateResponse(result=result)
     
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
+        # Validation errors from model.py
+        logger.warning(f"Validation error from {client_ip}: {type(e).__name__}: {str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(e)}
+        )
+    
+    except openai.OpenAIError as e:
+        # OpenAI API errors - log safely, map to user-friendly message
+        logger.error(
+            f"OpenAI API error from {client_ip}: {type(e).__name__}: {str(e)}"
+        )
+        error_msg = map_openai_error_to_message(e)
+        return JSONResponse(
+            status_code=500,
+            content={"error": error_msg}
+        )
+    
     except Exception as e:
-        # Log error but never log API keys or user text
-        error_msg = str(e)
-        logger.error(f"Error processing request from {client_ip}: {error_msg}")
-        raise HTTPException(status_code=500, detail={"error": "An error occurred while processing your request. Please try again."})
+        # Other exceptions - log safely, return generic message
+        logger.error(
+            f"Unexpected error from {client_ip}: {type(e).__name__}: {str(e)}"
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": "An error occurred while processing your request. Please try again."}
+        )
 
 
 # Mount static files (CSS, JS) from front_end directory
