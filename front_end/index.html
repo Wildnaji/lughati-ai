@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lughati AI — Arabic Grammar & Rewriting Assistant</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lughati AI</h1>
+            <p class="subtitle">Arabic Grammar & Rewriting Assistant</p>
+        </header>
+
+        <main>
+            <div class="api-key-section">
+                <div class="api-key-input-group">
+                    <label for="apiKey">OpenAI API Key (optional):</label>
+                    <input 
+                        type="password" 
+                        id="apiKey" 
+                        placeholder="sk-..." 
+                        autocomplete="off"
+                    >
+                    <button id="saveKeyBtn" class="btn btn-small">Save</button>
+                    <button id="clearKeyBtn" class="btn btn-small btn-danger">Clear Saved Key</button>
+                </div>
+                <div class="usage-info">
+                    <p class="usage-note">
+                        <strong>Free:</strong> 5 requests/day (uses server key) • 
+                        <strong>With your key:</strong> Unlimited use (your billing)
+                    </p>
+                    <p class="api-key-hint">Your key is stored locally in your browser and never sent to our servers except for API calls.</p>
+                </div>
+            </div>
+
+            <div class="controls">
+                <div class="mode-selector">
+                    <label for="mode">Mode:</label>
+                    <select id="mode" name="mode">
+                        <option value="grammar_fix">Grammar Fix (Standard Arabic)</option>
+                        <option value="professional_arabic">Rewrite – Professional Arabic</option>
+                        <option value="emirati_dialect">Rewrite – Emirati Dialect</option>
+                        <option value="academic_tone">Rewrite – Academic Tone</option>
+                        <option value="marketing_tone">Rewrite – Marketing Tone</option>
+                        <option value="translate_en_ar">Translate EN → AR</option>
+                        <option value="translate_ar_en">Translate AR → EN</option>
+                    </select>
+                </div>
+
+                <div class="action-buttons">
+                    <button id="generateBtn" class="btn btn-primary">Fix / Rewrite</button>
+                    <button id="clearInputBtn" class="btn btn-secondary">Clear Input</button>
+                    <button id="clearOutputBtn" class="btn btn-secondary">Clear Output</button>
+                </div>
+            </div>
+
+            <div class="content-grid">
+                <div class="input-section">
+                    <label for="inputText">Input Text:</label>
+                    <textarea 
+                        id="inputText" 
+                        placeholder="Enter your Arabic or English text here..."
+                        rows="12"
+                    ></textarea>
+                </div>
+
+                <div class="output-section">
+                    <div class="output-header">
+                        <label for="outputText">Result:</label>
+                        <button id="copyBtn" class="btn btn-small">Copy</button>
+                    </div>
+                    <textarea 
+                        id="outputText" 
+                        readonly
+                        placeholder="Your processed text will appear here..."
+                        rows="12"
+                    ></textarea>
+                </div>
+            </div>
+
+            <div id="status" class="status hidden"></div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+
+
